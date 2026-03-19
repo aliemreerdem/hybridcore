@@ -1,0 +1,27 @@
+# Çevrimiçi / MSVC Derleme Dosyaları
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.dll
+*.idb
+
+# Özel Dizinler ve Çıktılar
+bin/*.exe
+bin/*.pdb
+bin/shaders/*.cso
+
+# Editör & IDE Çöpleri
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+*.log
+
+# Proje Dokümanları
+session.md
+build_notes.md
+hybridcore.md
