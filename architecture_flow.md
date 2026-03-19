@@ -1,6 +1,6 @@
-# HybridCore: Mimari ve Akış Diyagramı (Work Stealing)
+# HybridCore: Architecture and Flow Diagram (Work Stealing)
 
-Aşağıdaki **Mermaid.js** tabanlı diyagram, motorun C++ seviyesindeki çalışma mantığını, bağımlılık (DAG) yönetim sistemini ve özel donanım işçilerinin (Worker Pool) merkezi havuzdan nasıl kilitlenmeden (lock-free) asenkron iş çaldıklarını göstermektedir.
+The **Mermaid.js** based diagram below illustrates the internal architecture at the C++ level, the Directed Acyclic Graph (DAG) dependency management, and how the dedicated hardware worker pools asynchronously "steal" jobs from the centralized thread-safe queues lock-free.
 
 ```mermaid
 graph TD
@@ -10,8 +10,8 @@ graph TD
     classDef worker fill:#00b894,stroke:#55efc4,stroke-width:2px,color:#fff;
     classDef hardware fill:#6c5ce7,stroke:#a29bfe,stroke-width:3px,color:#fff;
 
-    Engine["Engine Main Loop (16ms Tick)"]:::engine -.->|"Generates Batch"| DAG["DAG: İş Bağımlılıkları (Pre-Process -> AI -> Post-Process)"]:::engine
-    DAG -.->|"Submit"| JobRouter["JobRouter (Bağımlılık Çözücü)"]:::router
+    Engine["Engine Main Loop (16ms Tick)"]:::engine -.->|"Generates Batch"| DAG["DAG: Job Dependencies (Pre-Process -> AI -> Post-Process)"]:::engine
+    DAG -.->|"Submit"| JobRouter["JobRouter (Dependency Resolver)"]:::router
 
     JobRouter -->|"Job Unblocked & Type: HEAVY_COMPUTE"| GPUQ[("Global GPU Pool (ThreadSafeJobQueue)")]:::queue
     JobRouter -->|"Job Unblocked & Type: AI_INFERENCE"| NPUQ[("Global NPU Pool (ThreadSafeJobQueue)")]:::queue
@@ -22,22 +22,22 @@ graph TD
         W3["NPU Worker (Ryzen NPU)"]:::worker
     end
     
-    GPUQ -.->|"Async Pop (İş Çal)"| W1
-    GPUQ -.->|"Async Pop (İş Çal)"| W2
-    NPUQ -.->|"Async Pop (İş Çal)"| W3
+    GPUQ -.->|"Async Pop (Steal Job)"| W1
+    GPUQ -.->|"Async Pop (Steal Job)"| W2
+    NPUQ -.->|"Async Pop (Steal Job)"| W3
 
-    W1 == "D3D11 Dispatch" ==> HW1{{"AMD Radeon RX 9070 (Discrete GPU %100)"}}:::hardware
-    W2 == "D3D11 Dispatch" ==> HW2{{"AMD Radeon 890M (Integrated GPU %100)"}}:::hardware
-    W3 == "WinML Evaluate" ==> HW3{{"Ryzen AI NPU (MCDM %100)"}}:::hardware
+    W1 == "D3D11 Dispatch" ==> HW1{{"AMD Radeon RX 9070 (Discrete GPU 100%)"}}:::hardware
+    W2 == "D3D11 Dispatch" ==> HW2{{"AMD Radeon 890M (Integrated GPU 100%)"}}:::hardware
+    W3 == "WinML Evaluate" ==> HW3{{"Ryzen AI NPU (MCDM 100%)"}}:::hardware
 
     HW1 -.->|"OnJobCompleted"| JobRouter
     HW2 -.->|"OnJobCompleted"| JobRouter
     HW3 -.->|"OnJobCompleted"| JobRouter
 ```
 
-## Karar Mekanizmaları ve İş Akışı
-1. **Engine Tick (Motor Döngüsü):** `Engine::Update()` sistemi sürekli izler. Sistemin nefes alabileceği yer varsa, donanımlara (J1, J2, J3) zincirinden oluşan yeni bir iş bloğu (Batch) paketler ve *JobRouter*'a iletir.
-2. **DAG Çözümü (Bağımlılık Zinciri):** `JobRouter` gelen işlerin `dependencies` (bağımlılık) listesini kontrol eder. Örneğin `J2 (AI)`, `J1 (eGPU)` bitmeden devreye alınmaz. `J1` bitince `J2` tetiklenir.
-3. **Kuyruk Yönlendirmesi (Entegre Havuzlar):** Bağımlılığı çözülen işler, türlerine göre iki devasa havuza kilitlenebilir kuyruk (ThreadSafeJobQueue) kullanılarak bırakılır: biri **GPU**'lar için (HEAVY_COMPUTE), diğeri **NPU**'lar için (AI_INFERENCE).
-4. **İş Çalma (Work Stealing Mimarisi):** Burada sistem adaleti bir kenara bırakır ve acımasız davranır! GPU Worker'lar her kendi işleri biter bitmez `Global GPU Pool`'dan anlık olarak (`cv.wait` üzerinden async lock kırarak) radikal bir hızda yeni bir İş Çalarlar. RX 9070 bu yarışta 890M'e göre aşırı süratli olduğu için iş yükünün tamamına yakınını organik olarak sırtlar ve %100 orana vurur.
-5. **Geri Bildirim Döngüsü:** Donanımların işlemleri bittiğinde, `OnJobCompleted` olayı (Event) Router'a fırlatılır. `JobRouter` bunu merkeze alır ve bağlı olduğu bir iş varsa (Örneğin J3, J2 bitince uyanacaktır) onu Global havuza serbest bırakır ve sistem döngüsü devam eder.
+## Decision Mechanisms and Workflow
+1. **Engine Tick:** `Engine::Update()` continuously monitors the system. Whenever the system has capacity to breathe, it packages a new block of work (Batch) consisting of a chain of hardware dependencies (J1, J2, J3) and forwards it to the `JobRouter`.
+2. **DAG Resolution (Dependency Chain):** The `JobRouter` evaluates the `dependencies` list of incoming jobs. For instance, `J2 (AI)` is never scheduled until `J1 (eGPU)` completes. Once `J1` finishes, `J2` is unblocked.
+3. **Queue Routing (Integrated Pools):** Unblocked jobs are dispatched into one of two massive, lockable pools (`ThreadSafeJobQueue`) based on their computation type: one for **GPUs** (`HEAVY_COMPUTE`) and another for **NPUs** (`AI_INFERENCE`).
+4. **Work Stealing Architecture:** At this stage, the system abandons "fairness" and becomes completely aggressive! As soon as a GPU Worker finishes its active task, it instantaneously queries the `Global GPU Pool` and steals a new job with extreme speed (breaking the async lock via `cv.wait`). Because the RX 9070 is significantly faster in this race compared to the integrated 890M, it organically shoulders almost the entirety of the workload, pinning constantly at 100% utilization.
+5. **Feedback Loop:** Upon hardware execution completion, an `OnJobCompleted` event is fired back to the Router. The `JobRouter` centralizes this event, and if any blocked job depends on it (e.g., J3 waking up after J2 concludes), the Router releases it into the Global pool, perpetuating the system iteration indefinitely.
