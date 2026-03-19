@@ -37,9 +37,9 @@ void WorkerQueue::WorkerLoop() {
             
             m_completedJobsCount++;
 
-            // Notify router
+            // Notify router (Passes raw pointer for Arena releasing)
             if (onJobCompleted) {
-                onJobCompleted(currentJob->id);
+                onJobCompleted(currentJob);
             }
         }
     }
@@ -47,8 +47,9 @@ void WorkerQueue::WorkerLoop() {
 }
 
 // --- JobRouter ---
-JobRouter::JobRouter() {
+JobRouter::JobRouter() : m_jobPool(100000) {
     std::cout << "[JobRouter] Initializing Hybrid Hardware Queues (Work Stealing Pattern)" << std::endl;
+    std::cout << "[JobRouter] Pre-allocating " << 100000 << " contiguous Job structs into Memory Arena." << std::endl;
     m_gpuJobQueue = std::make_shared<ThreadSafeJobQueue>();
     m_npuJobQueue = std::make_shared<ThreadSafeJobQueue>();
 }
@@ -59,24 +60,32 @@ JobRouter::~JobRouter() {
 
 void JobRouter::RegisterGpuWorker(const std::string& name, std::function<void(const Job&)> executor) {
     auto q = std::make_unique<WorkerQueue>(name, m_gpuJobQueue, executor);
-    q->onJobCompleted = [this](std::string id) { this->OnJobCompleted(id); };
+    q->onJobCompleted = [this](Job* job) { this->OnJobCompleted(job); };
     m_gpuWorkers.push_back(std::move(q));
 }
 
 void JobRouter::RegisterNpuWorker(const std::string& name, std::function<void(const Job&)> executor) {
     auto q = std::make_unique<WorkerQueue>(name, m_npuJobQueue, executor);
-    q->onJobCompleted = [this](std::string id) { this->OnJobCompleted(id); };
+    q->onJobCompleted = [this](Job* job) { this->OnJobCompleted(job); };
     m_npuWorkers.push_back(std::move(q));
 }
 
 void JobRouter::SubmitJob(const Job& job) {
     std::lock_guard<std::mutex> lock(m_routerMutex);
-    m_pendingJobs.push_back(std::make_shared<Job>(job));
+    
+    Job* allocJob = m_jobPool.Acquire();
+    if (allocJob) {
+        *allocJob = job; // Copy contents to contiguous arena block
+        m_pendingJobs.push_back(allocJob);
+    } else {
+        std::cerr << "[JobRouter] FATAL OOM: Job Arena Pool Exhausted!" << std::endl;
+    }
 }
 
-void JobRouter::OnJobCompleted(const std::string& jobId) {
+void JobRouter::OnJobCompleted(Job* job) {
     std::lock_guard<std::mutex> lock(m_routerMutex);
-    m_completedJobs.insert(jobId);
+    m_completedJobs.insert(job->id);
+    m_jobPool.Release(job); // Instant GC-free recovery
 }
 
 void JobRouter::Update() {

@@ -2,13 +2,19 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <d3dcompiler.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d3dcompiler.lib")
 
 namespace graphics {
 
-ComputeBenchmarker::ComputeBenchmarker() {}
+ComputeBenchmarker::ComputeBenchmarker() {
+    m_lastShaderWriteTime.dwLowDateTime = 0;
+    m_lastShaderWriteTime.dwHighDateTime = 0;
+    m_shaderSourcePath = L"src\\shaders\\compute.hlsl";
+}
 
 ComputeBenchmarker::~ComputeBenchmarker() {}
 
@@ -49,8 +55,13 @@ bool ComputeBenchmarker::Initialize(UINT adapterIndex) {
         return false;
     }
 
-    if (!LoadShader(L"bin\\shaders\\compute.cso")) {
-        return false;
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+    if (GetFileAttributesExW(m_shaderSourcePath.c_str(), GetFileExInfoStandard, &fileInfo)) {
+        m_lastShaderWriteTime = fileInfo.ftLastWriteTime;
+        CompileAndSwapShader(m_shaderSourcePath);
+    } else {
+        std::cerr << "[ComputeBenchmarker] Warning: compute.hlsl source file missing! Falling back to cached payload." << std::endl;
+        LoadShader(L"bin\\shaders\\compute.cso");
     }
 
     // Islenmis verileri depolamak uzere Unordered Access View (UAV) buffer yaratimi
@@ -75,10 +86,54 @@ bool ComputeBenchmarker::Initialize(UINT adapterIndex) {
     return true;
 }
 
+bool ComputeBenchmarker::CompileAndSwapShader(const std::wstring& hlslPath) {
+    ComPtr<ID3DBlob> computeBlob = nullptr;
+    ComPtr<ID3DBlob> errorBlob = nullptr;
+    
+    UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
+
+    HRESULT hr = D3DCompileFromFile(
+        hlslPath.c_str(), nullptr, nullptr, 
+        "main", "cs_5_0", 
+        flags, 0, &computeBlob, &errorBlob
+    );
+
+    if (FAILED(hr)) {
+        if (errorBlob) {
+            std::cerr << "\n[HLSL HOT-RELOAD ERROR]\n" 
+                      << (char*)errorBlob->GetBufferPointer() << std::endl;
+        }
+        return false;
+    }
+
+    ComPtr<ID3D11ComputeShader> newShader;
+    hr = m_device->CreateComputeShader(computeBlob->GetBufferPointer(), computeBlob->GetBufferSize(), nullptr, &newShader);
+    
+    if (SUCCEEDED(hr)) {
+        std::lock_guard<std::mutex> lock(m_shaderMutex);
+        m_computeShader = newShader;
+        std::cout << "[ComputeBenchmarker] HLSL File updated -> Compiled & Hot-Swapped Successfully!" << std::endl;
+        return true;
+    }
+    return false;
+}
+
+void ComputeBenchmarker::CheckForShaderUpdates() {
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+    if (GetFileAttributesExW(m_shaderSourcePath.c_str(), GetFileExInfoStandard, &fileInfo)) {
+        if (CompareFileTime(&fileInfo.ftLastWriteTime, &m_lastShaderWriteTime) > 0) {
+            // Wait slightly for the file lock to be fully released by external editors
+            Sleep(100); 
+            m_lastShaderWriteTime = fileInfo.ftLastWriteTime;
+            CompileAndSwapShader(m_shaderSourcePath);
+        }
+    }
+}
+
 bool ComputeBenchmarker::LoadShader(const std::wstring& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
-        std::cerr << "[ComputeBenchmarker] Shader CSO bulunamadi. Yol: bin\\shaders\\compute.cso" << std::endl;
+        std::cerr << "[ComputeBenchmarker] Shader CSO bulunamadi. Yol: " << std::string(path.begin(), path.end()) << std::endl;
         return false;
     }
 
@@ -93,6 +148,8 @@ bool ComputeBenchmarker::LoadShader(const std::wstring& path) {
 }
 
 void ComputeBenchmarker::DispatchWorkload() {
+    std::lock_guard<std::mutex> lock(m_shaderMutex);
+    
     if (!m_context || !m_computeShader) return;
 
     // Buffer'lari ve Shader'i donanim uzerine bagla

@@ -1,15 +1,30 @@
 #include "Engine.h"
+#include "../vendor/imgui/imgui.h"
+#include "../vendor/imgui/imgui_impl_win32.h"
+#include "../vendor/imgui/imgui_impl_dx11.h"
+
 #include <iostream>
 #include <thread>
 #include <chrono>
 #include <windows.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
+#include <string>
 
 namespace core {
 
 Engine::Engine() : m_isRunning(false), m_isSimulating(false), m_batchCounter(0), m_lastEGpuCount(0), m_lastNpuCount(0) {}
 Engine::~Engine() {}
+
+void Engine::CreateRenderTarget() {
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> pBackBuffer;
+    m_swapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    m_d3dDevice->CreateRenderTargetView(pBackBuffer.Get(), nullptr, &m_mainRenderTargetView);
+}
+
+void Engine::CleanupRenderTarget() {
+    if (m_mainRenderTargetView) { m_mainRenderTargetView.Reset(); }
+}
 
 void Engine::Initialize() {
     std::cout << "[Engine] Initializing subsystems..." << std::endl;
@@ -19,6 +34,44 @@ void Engine::Initialize() {
     m_window->SetMenuCallback([this](int menuId) {
         this->HandleMenuEvent(menuId);
     });
+
+    // --- Bootstrapping OS Default Device & SwapChain for the UI Overlay ---
+    DXGI_SWAP_CHAIN_DESC sd = {};
+    sd.BufferCount = 2;
+    sd.BufferDesc.Width = 0;
+    sd.BufferDesc.Height = 0;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = m_window->GetHWND();
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    
+    UINT createDeviceFlags = 0;
+    D3D_FEATURE_LEVEL featureLevel;
+    const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
+    HRESULT res = D3D11CreateDeviceAndSwapChain(
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags,
+        featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &m_swapChain, &m_d3dDevice, &featureLevel, &m_d3dContext);
+
+    if (FAILED(res)) {
+        std::cerr << "[Engine] Internal SwapChain deployment collapsed. ImGui binding will abort." << std::endl;
+    } else {
+        CreateRenderTarget();
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        ImGui::StyleColorsDark();
+
+        ImGui_ImplWin32_Init(m_window->GetHWND());
+        ImGui_ImplDX11_Init(m_d3dDevice.Get(), m_d3dContext.Get());
+        std::cout << "[Engine] Dear ImGui Overlay Mounted over Native OS context." << std::endl;
+    }
 
     m_jobRouter = std::make_unique<JobRouter>();
     
@@ -118,6 +171,11 @@ void Engine::Run() {
 
 void Engine::Update() {
     if (m_jobRouter) {
+        // [Hot-Reloading] Poll shader changes per frame
+        for (auto& gpu : m_gpuBenchmarkers) {
+            gpu->CheckForShaderUpdates();
+        }
+
         // If simulation is running and we have less than 12 active jobs system-wide (approx 4 parallel DAG batches), inject more work
         if (m_isSimulating && m_jobRouter->GetTotalJobCount() < 12) {
             uint64_t bId = m_batchCounter++;
@@ -132,28 +190,60 @@ void Engine::Update() {
         }
         
         m_jobRouter->Update(); // Evaluate DAG and dispatch jobs to workers
-        
-        if (m_isSimulating) {
-            auto now = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastLogTime).count() >= 1000) {
-                uint64_t curEGpu = m_jobRouter->GeteGpuCompleted();
-                uint64_t curNpu = m_jobRouter->GetNpuCompleted();
-                std::cout << "[System Metrics] eGPU Throughput: " << (curEGpu - m_lastEGpuCount) 
-                          << " jobs/s | NPU Throughput: " << (curNpu - m_lastNpuCount) 
-                          << " jobs/s | Processing Queue Load: " << m_jobRouter->GetTotalJobCount() << std::endl;
-                
-                m_lastEGpuCount = curEGpu;
-                m_lastNpuCount = curNpu;
-                m_lastLogTime = now;
-            }
-        }
     }
 }
 
-void Engine::Render() {}
+void Engine::Render() {
+    if (!m_d3dContext) return;
+
+    // Push ImGui Frame Contexts
+    ImGui_ImplDX11_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+
+    // Render Dynamic Performance Dashboard
+    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(400, 200), ImGuiCond_FirstUseEver);
+    ImGui::Begin("HybridCore Load Balancer & Telemetry", nullptr, ImGuiWindowFlags_NoCollapse);
+    
+    if (m_jobRouter) {
+        ImGui::Text("Global Active Tasks : %zu", m_jobRouter->GetTotalJobCount());
+        ImGui::Separator();
+        ImGui::Text("RX 9070 (eGPU) Tasks Completed : %llu", m_jobRouter->GeteGpuCompleted());
+        ImGui::Text("Ryzen AI (NPU) Tasks Completed: %llu", m_jobRouter->GetNpuCompleted());
+    } else {
+        ImGui::Text("Job Router mapping disabled.");
+    }
+    
+    if (m_isSimulating) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "SIMULATION IN PROGRESS (Maximum Hardware Bind)");
+    } else {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "ENGINE IDLE (Awaiting Win32 Events)");
+    }
+
+    ImGui::End();
+
+    ImGui::Render();
+
+    const float clear_color[4] = { 0.08f, 0.1f, 0.12f, 1.0f }; // Sleek dark slate
+    m_d3dContext->OMSetRenderTargets(1, m_mainRenderTargetView.GetAddressOf(), nullptr);
+    m_d3dContext->ClearRenderTargetView(m_mainRenderTargetView.Get(), clear_color);
+    
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    m_swapChain->Present(1, 0); // V-Sync enabled output
+}
 
 void Engine::Shutdown() {
     std::cout << "[Engine] Shutdown initiated, cleaning up engine memory." << std::endl;
+    
+    // Shutting down external ImGui hooks
+    if (m_d3dDevice) {
+        ImGui_ImplDX11_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+        CleanupRenderTarget();
+    }
+
     m_window.reset();
 }
 

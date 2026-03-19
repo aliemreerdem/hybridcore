@@ -3,6 +3,10 @@
 #include "JobRouter.h"
 #include "../graphics/ComputeBenchmarker.h"
 #include "../ai/NpuEngine.h"
+
+#include <d3d11.h>
+#include <dxgi.h>
+
 #include <memory>
 #include <atomic>
 #include <chrono>
@@ -37,6 +41,15 @@ private:
     std::chrono::steady_clock::time_point m_lastLogTime;
     uint64_t m_lastEGpuCount;
     uint64_t m_lastNpuCount;
+
+    // --- Overlay Render Pipeline ---
+    Microsoft::WRL::ComPtr<ID3D11Device> m_d3dDevice;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_d3dContext;
+    Microsoft::WRL::ComPtr<IDXGISwapChain> m_swapChain;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_mainRenderTargetView;
+
+    void CreateRenderTarget();
+    void CleanupRenderTarget();
 };
 
 } // namespace core
