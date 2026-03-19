@@ -12,14 +12,27 @@ graph TD
     classDef external fill:#d63031,stroke:#ff7675,stroke-width:2px,color:#fff;
     classDef ui fill:#fdcb6e,stroke:#ffeaa7,stroke-width:2px,color:#2d3436;
 
-    Engine["Engine Main Loop (Win32/DX11)"]:::engine -.->|"Poll Filesystem"| HLSL["compute.hlsl (Live Hot-Reloading)"]:::external
-    Engine -.->|"Renders"| UI["Dear ImGui Telemetry Dashboard"]:::ui
-    Engine -.->|"Generates Batch"| DAG["DAG: Job Dependencies (Pre-Process -> AI -> Post-Process)"]:::engine
-    DAG -.->|"Checkout Pointer"| MemoryArena["Global JobPool (Zero-Allocation Arena)"]:::engine
-    MemoryArena -.->|"Submit Job*"| JobRouter["JobRouter (Dependency Resolver)"]:::router
+    Engine["Engine Main Loop (Win32/DX11)"]:::engine
+    HLSL["compute.hlsl (Live Hot-Reloading)"]:::external
+    UI["Dear ImGui Telemetry Dashboard"]:::ui
+    DAG["DAG: Job Dependencies"]:::engine
+    MemoryArena["Global JobPool (Zero-Allocation Arena)"]:::engine
+    JobRouter["JobRouter (Dependency Resolver)"]:::router
+    ErrorLog["error.log (Global SEH)"]:::external
 
-    JobRouter -->|"Job Unblocked & Type: HEAVY_COMPUTE"| GPUQ[("Global GPU Pool (ThreadSafeJobQueue)")]:::queue
-    JobRouter -->|"Job Unblocked & Type: AI_INFERENCE"| NPUQ[("Global NPU Pool (ThreadSafeJobQueue)")]:::queue
+    Engine -->|"Poll Filesystem"| HLSL
+    Engine -->|"Renders UI"| UI
+    Engine -->|"Generates Batch"| DAG
+    
+    DAG -->|"Checkout Pointer"| MemoryArena
+    MemoryArena -->|"Submit Job"| JobRouter
+
+    GPUQ[("Global GPU Pool (ThreadSafeJobQueue)")]:::queue
+    NPUQ[("Global NPU Pool (ThreadSafeJobQueue)")]:::queue
+
+    JobRouter -->|"Type: HEAVY_COMPUTE"| GPUQ
+    JobRouter -->|"Type: AI_INFERENCE"| NPUQ
+    JobRouter -->|"Any Crashing Error"| ErrorLog
 
     subgraph CompetingConsumers ["Competing Consumers (Work Stealing)"]
         W1["GPU Worker 1 (eGPU)"]:::worker
@@ -27,20 +40,23 @@ graph TD
         W3["NPU Worker (Ryzen NPU)"]:::worker
     end
     
-    GPUQ -.->|"Async Pop (Steal Job)"| W1
-    GPUQ -.->|"Async Pop (Steal Job)"| W2
-    NPUQ -.->|"Async Pop (Steal Job)"| W3
+    GPUQ -->|"Async Pop"| W1
+    GPUQ -->|"Async Pop"| W2
+    NPUQ -->|"Async Pop"| W3
 
-    W1 == "D3D11 Dispatch" ==> HW1{{"AMD Radeon RX 9070 (Discrete GPU 100%)"}}:::hardware
-    W2 == "D3D11 Dispatch" ==> HW2{{"AMD Radeon 890M (Integrated GPU 100%)"}}:::hardware
-    W3 == "WinML Evaluate" ==> HW3{{"Ryzen AI NPU (MCDM 100%)"}}:::hardware
+    HW1{{"AMD Radeon RX 9070 (Discrete GPU 100%)"}}:::hardware
+    HW2{{"AMD Radeon 890M (Integrated GPU 100%)"}}:::hardware
+    HW3{{"Ryzen AI NPU (MCDM 100%)"}}:::hardware
+
+    W1 -->|"D3D11 Dispatch"| HW1
+    W2 -->|"D3D11 Dispatch"| HW2
+    W3 -->|"WinML Evaluate"| HW3
+    
     HLSL -.->|"D3DCompileFromFile"| HW1
 
-    HW1 -.->|"OnJobCompleted (Recycle Pointer)"| JobRouter
-    HW2 -.->|"OnJobCompleted (Recycle Pointer)"| JobRouter
-    HW3 -.->|"OnJobCompleted (Recycle Pointer)"| JobRouter
-    
-    JobRouter -.->|"Any Crashing Error"| ErrorLog["error.log (Global SEH)"]:::external
+    HW1 -.->|"Recycle Pointer"| JobRouter
+    HW2 -.->|"Recycle Pointer"| JobRouter
+    HW3 -.->|"Recycle Pointer"| JobRouter
 ```
 
 ## Decision Mechanisms and Workflow
