@@ -25,6 +25,13 @@ Consequently, the system was upgraded to a modern "Competing Consumers / Work St
 2. GPU worker threads now asynchronously (lock-free) "steal" (pop) fresh jobs from the pool the exact millisecond their payload finishes.
 3. As a result, by the time the weaker graphics card fetches a single job from the pool, the powerful eGPU naturally melts 20 jobs on its own initiative. Both graphics cards and the AI NPU flawlessly operate at 100% utilization simultaneously.
 
+## Advanced Industrial Features
+To transcend from a standard orchestrator into a fully production-ready industrial engine, four major subsystems were successfully integrated natively (Zero-Dependency):
+* **Global Structured Exception Handling (SEH):** All crashes (C++, WinRT anomalies, memory access violations) are deterministically trapped via SetUnhandledExceptionFilter. Immutable stack and component footprints are written to `error.log` with formatted timestamps, preventing silent failures.
+* **Zero-Allocation Memory Arena:** Instead of dynamically yielding `Job` payloads to the OS Heap (`std::shared_ptr`), the engine maps 100,000 raw `Job*` elements contiguously in a `JobPool` array during Boot. hardware bindings instantaneously recycle pointers mathematically ensuring 0 memory fragmentation during massive HPC loads.
+* **Live HLSL Shader Hot-Reloading:** The engine actively intercepts Win32 `GetFileAttributesEx` LastWriteTime bounds for `compute.hlsl` 60 times a second. Modifying the algorithm in Notepad immediately triggers a background native `D3DCompileFromFile` invoking an asynchronous `std::mutex` swap. GPU kernels are instantaneously replaced without terminating the process or breaking existing workloads.
+* **Dear ImGui Native Telemetry:** The engine explicitly boots its own private D3D11 `IDXGISwapChain` targeting the primary output window. ImGui is bound strictly via zero-dependency headers (no submodules) outputting a live 60 FPS graphical HUD illustrating Global Job Counts and isolated NPU/eGPU completion throughput directly onto the native Win32 window.
+
 ## How to Compile and Run
 Adhering to its zero-dependency philosophy, the system does not require any external IDE project configurations (e.g., CMakeLists.txt). It is built with a single click using a batch MSVC command line from the root directory (leveraging the native Windows SDK).
 
