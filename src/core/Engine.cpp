@@ -158,9 +158,10 @@ void Engine::Run() {
 
 void Engine::Update() {
     if (m_jobRouter) {
-        // [Hot-Reloading] Poll shader changes per frame
+        // [Hot-Reloading] Poll shader changes and telemetry per frame
         for (auto& gpu : m_gpuBenchmarkers) {
             gpu->CheckForShaderUpdates();
+            gpu->UpdateTelemetry();
         }
 
         // If simulation is running and we have less than 12 active jobs system-wide (approx 4 parallel DAG batches), inject more work
@@ -190,24 +191,57 @@ void Engine::Render() {
 
     // Render Dynamic Performance Dashboard
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(400, 200), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(520, 420), ImGuiCond_FirstUseEver);
     ImGui::Begin("HybridCore Load Balancer & Telemetry", nullptr, ImGuiWindowFlags_NoCollapse);
     
-    if (m_jobRouter) {
-        ImGui::Text("Global Active Tasks : %zu", m_jobRouter->GetTotalJobCount());
-        ImGui::Separator();
-        auto stats = m_jobRouter->GetWorkerStats();
-        for (const auto& w : stats) {
-            ImGui::Text("%s Tasks Completed : %llu", w.name.c_str(), w.completed);
-        }
-    } else {
-        ImGui::Text("Job Router mapping disabled.");
-    }
-    
     if (m_isSimulating) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "SIMULATION IN PROGRESS (Maximum Hardware Bind)");
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[ACTIVE] SIMULATION IN PROGRESS");
     } else {
-        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "ENGINE IDLE (Awaiting Win32 Events)");
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "[IDLE] Awaiting Start Command");
+    }
+
+    if (m_jobRouter) {
+        ImGui::Text("Global DAG Queue: %zu active tasks", m_jobRouter->GetTotalJobCount());
+    }
+    ImGui::Separator();
+
+    // Per-GPU Telemetry Cards
+    size_t gpuIdx = 0;
+    auto stats = m_jobRouter ? m_jobRouter->GetWorkerStats() : std::vector<core::JobRouter::WorkerStats>{};
+    for (auto& gpu : m_gpuBenchmarkers) {
+        const auto& t = gpu->GetTelemetry();
+        char nameStr[128];
+        size_t conv = 0;
+        wcstombs_s(&conv, nameStr, sizeof(nameStr), gpu->GetAdapterName().c_str(), _TRUNCATE);
+
+        ImGui::PushID((int)gpuIdx);
+        
+        // GPU Header
+        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "GPU %zu: %s", gpuIdx, nameStr);
+
+        // Temperature with color coding
+        ImVec4 tempColor;
+        if (t.temperatureC < 60.0f) tempColor = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);       // Green
+        else if (t.temperatureC < 80.0f) tempColor = ImVec4(1.0f, 0.9f, 0.2f, 1.0f);  // Yellow
+        else tempColor = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);                               // Red
+        
+        ImGui::TextColored(tempColor, "  Temperature: %.1f C", t.temperatureC);
+        ImGui::SameLine(300);
+        ImGui::Text("Core: %.0f MHz", t.coreClockMhz);
+
+        // VRAM Usage Bar
+        char vramLabel[64];
+        sprintf_s(vramLabel, "VRAM: %llu / %llu MB", t.vramUsedMB, t.vramTotalMB);
+        ImGui::ProgressBar(t.vramUsagePercent / 100.0f, ImVec2(-1, 18), vramLabel);
+
+        // Tasks completed
+        if (gpuIdx < stats.size()) {
+            ImGui::Text("  Tasks Completed: %llu", stats[gpuIdx].completed);
+        }
+
+        ImGui::PopID();
+        ImGui::Spacing();
+        gpuIdx++;
     }
 
     ImGui::End();
