@@ -51,7 +51,6 @@ JobRouter::JobRouter() : m_jobPool(100000) {
     std::cout << "[JobRouter] Initializing Hybrid Hardware Queues (Work Stealing Pattern)" << std::endl;
     std::cout << "[JobRouter] Pre-allocating " << 100000 << " contiguous Job structs into Memory Arena." << std::endl;
     m_gpuJobQueue = std::make_shared<ThreadSafeJobQueue>();
-    m_npuJobQueue = std::make_shared<ThreadSafeJobQueue>();
 }
 
 JobRouter::~JobRouter() {
@@ -62,12 +61,6 @@ void JobRouter::RegisterGpuWorker(const std::string& name, std::function<void(co
     auto q = std::make_unique<WorkerQueue>(name, m_gpuJobQueue, executor);
     q->onJobCompleted = [this](Job* job) { this->OnJobCompleted(job); };
     m_gpuWorkers.push_back(std::move(q));
-}
-
-void JobRouter::RegisterNpuWorker(const std::string& name, std::function<void(const Job&)> executor) {
-    auto q = std::make_unique<WorkerQueue>(name, m_npuJobQueue, executor);
-    q->onJobCompleted = [this](Job* job) { this->OnJobCompleted(job); };
-    m_npuWorkers.push_back(std::move(q));
 }
 
 void JobRouter::SubmitJob(const Job& job) {
@@ -105,13 +98,8 @@ void JobRouter::Update() {
         }
 
         if (ready) {
-            // Routing Logic (Global Queue Pushing)
-            if (job->type == JobType::HEAVY_COMPUTE) {
-                m_gpuJobQueue->PushJob(job);
-            } else if (job->type == JobType::AI_INFERENCE) {
-                m_npuJobQueue->PushJob(job);
-            }
-            // Remove from pending immediately after dispatch
+            // All workloads map to the generic compute pipeline
+            m_gpuJobQueue->PushJob(job);
             it = m_pendingJobs.erase(it); 
         } else {
             ++it;
@@ -121,26 +109,21 @@ void JobRouter::Update() {
 
 size_t JobRouter::GetTotalJobCount() {
     std::lock_guard<std::mutex> lock(m_routerMutex);
-    return m_pendingJobs.size() + m_gpuJobQueue->GetJobCount() + m_npuJobQueue->GetJobCount();
+    return m_pendingJobs.size() + m_gpuJobQueue->GetJobCount();
 }
 
 void JobRouter::ClearJobs() {
     std::lock_guard<std::mutex> lock(m_routerMutex);
     m_pendingJobs.clear();
     m_gpuJobQueue->Clear();
-    m_npuJobQueue->Clear();
 }
 
-uint64_t JobRouter::GeteGpuCompleted() {
-    uint64_t total = 0;
-    for (auto& q : m_gpuWorkers) total += q->GetCompletedCount();
-    return total;
-}
-
-uint64_t JobRouter::GetNpuCompleted() {
-    uint64_t total = 0;
-    for (auto& q : m_npuWorkers) total += q->GetCompletedCount();
-    return total;
+std::vector<JobRouter::WorkerStats> JobRouter::GetWorkerStats() const {
+    std::vector<WorkerStats> stats;
+    for (const auto& w : m_gpuWorkers) {
+        stats.push_back({w->GetName(), w->GetCompletedCount()});
+    }
+    return stats;
 }
 
 } // namespace core

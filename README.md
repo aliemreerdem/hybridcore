@@ -1,47 +1,173 @@
-# HybridCore: Infinite Scaling Hardware Orchestrator
+# HybridCore — Dynamic Multi-GPU Load Balancer & Telemetry Engine
 
-HybridCore is an ultra-high-performance C++ job routing engine designed with a "Zero-Dependency" philosophy to extract 100% performance simultaneously from modern asymmetric hardware architectures (such as eGPUs, iGPUs, and NPUs).
+A high-performance, zero-dependency C++ application that dynamically discovers **all** physical GPUs in a system and saturates them at 100% capacity through an intelligent work-stealing architecture. Built with DirectX 11 Compute, Dear ImGui, and native Win32 — compiled standalone via MSVC without CMake or external runtimes.
 
-## Project Goal
-In traditional projects, software typically binds to the first (or default) graphics card detected by the system, often leaving the integrated GPU or the NPU completely idle. HybridCore eliminates this waste. Inspired by NServiceBus and microservice architectures, it features a robust Directed Acyclic Graph (DAG) workload executor.
-Tens of thousands of enterprise workflows (e.g., Data Preparation -> AI Inference -> Data Processing) are instantly distributed to the appropriate hardware pools based on their requirements ("Heavy Compute" or "NPU Workload").
+---
 
-Our objective is simple: To eliminate hardware bottlenecks by pushing all silicon devices on the system (RX 9070 eGPU, Radeon 890M iGPU, Ryzen AI NPU) to 100% load simultaneously without a single instruction of waste.
+## Features
 
-## Core Technologies and Native APIs
-No external heavy libraries (Boost, .NET, CMake, Python) are included. To achieve pure hybrid power, the engine talks directly to the Windows Kernel and Graphics layers:
-* **Modern C++20 (MSVC):** Code is linked with Static Runtime Linker (`/MT`) flags to ensure no dynamic library (`.dll`) dependencies are required.
-* **DirectX Graphics Infrastructure (DXGI):** Instead of blindly trusting the default adapter, all iGPUs and eGPUs on the PCI-E bus are dynamically discovered and assigned to isolated CPU threads using the `EnumAdapters1` interface.
-* **Direct3D 11 Compute Shaders (HLSL):** Hardware-level shader architecture, as powerful as CUDA in parallel programming, is utilized. Thousands of distinct compute threads (Dispatches) are triggered per graphics card.
-* **Windows Machine Learning & C++/WinRT:** To execute AMD Ryzen AI NPU cores, ONNX models (`mnist-8.onnx`) are fired directly at the hardware Neural Processing Units using the Microsoft Compute Driver Model (MCDM).
+- **Dynamic N-GPU Discovery**: Automatically detects every hardware GPU via DXGI (discrete, integrated, external — any count).
+- **Work-Stealing Load Balancer**: Thread-safe DAG-based `JobRouter` distributes compute workloads across all GPUs. Faster hardware organically steals more work.
+- **Real-time ImGui Telemetry**: Live overlay dashboard showing per-GPU task completion counters and simulation status.
+- **HLSL Hot-Reload**: Edit `compute.hlsl` while the app runs — shaders recompile and swap in real-time.
+- **Zero-Allocation Job Arena**: Pre-allocated 100,000 job pool eliminates heap fragmentation during max-load scenarios.
+- **Global Exception Handling**: SEH filter + structured `try-catch` blocks write crash diagnostics to `error.log`.
+- **Standalone Build**: Single `build.bat` using MSVC `cl.exe` with `/MT` static linking. No CMake, no vcpkg, no DLL hell.
 
-## The Heart of the Architecture: The "Work Stealing" Paradigm
-The greatest engineering triumph of the development phase was the evolution of the Distribution Algorithm.
+---
 
-Initially, a classic Round-Robin approach (distributing tasks sequentially: one for you, one for you) was implemented to be "fair" to the hardware. However, this resulted in a catastrophe; the massively powerful asymmetric eGPU would finish its 50 tasks in milliseconds, quickly draining its queue and falling into an idle state at 38% utilization, while the weaker iGPU was buried under tasks, severely clogging the pipeline and deadlocking the queuing engine.
+## Quick Start
 
-Consequently, the system was upgraded to a modern "Competing Consumers / Work Stealing" architecture:
-1. Individual hardware queues were discarded in favor of a massive, centralized `ThreadSafeJobQueue` (Universal Pool) protected at the OS level.
-2. GPU worker threads now asynchronously (lock-free) "steal" (pop) fresh jobs from the pool the exact millisecond their payload finishes.
-3. As a result, by the time the weaker graphics card fetches a single job from the pool, the powerful eGPU naturally melts 20 jobs on its own initiative. Both graphics cards and the AI NPU flawlessly operate at 100% utilization simultaneously.
+```bash
+# 1. Build (requires Visual Studio with C++ Desktop workload)
+build.bat
 
-## Advanced Industrial Features
-To transcend from a standard orchestrator into a fully production-ready industrial engine, four major subsystems were successfully integrated natively (Zero-Dependency):
-* **Global Structured Exception Handling (SEH):** All crashes (C++, WinRT anomalies, memory access violations) are deterministically trapped via SetUnhandledExceptionFilter. Immutable stack and component footprints are written to `error.log` with formatted timestamps, preventing silent failures.
-* **Zero-Allocation Memory Arena:** Instead of dynamically yielding `Job` payloads to the OS Heap (`std::shared_ptr`), the engine maps 100,000 raw `Job*` elements contiguously in a `JobPool` array during Boot. hardware bindings instantaneously recycle pointers mathematically ensuring 0 memory fragmentation during massive HPC loads.
-* **Live HLSL Shader Hot-Reloading:** The engine actively intercepts Win32 `GetFileAttributesEx` LastWriteTime bounds for `compute.hlsl` 60 times a second. Modifying the algorithm in Notepad immediately triggers a background native `D3DCompileFromFile` invoking an asynchronous `std::mutex` swap. GPU kernels are instantaneously replaced without terminating the process or breaking existing workloads.
-* **Dear ImGui Native Telemetry:** The engine explicitly boots its own private D3D11 `IDXGISwapChain` targeting the primary output window. ImGui is bound strictly via zero-dependency headers (no submodules) outputting a live 60 FPS graphical HUD illustrating Global Job Counts and isolated NPU/eGPU completion throughput directly onto the native Win32 window.
-
-## How to Compile and Run
-Adhering to its zero-dependency philosophy, the system does not require any external IDE project configurations (e.g., CMakeLists.txt). It is built with a single click using a batch MSVC command line from the root directory (leveraging the native Windows SDK).
-
-From Cmd / PowerShell in the repository root directory:
-```bat
-.\build.bat
-```
-*(The script compiles your HLSL shaders into hardware bytecode (`.cso`) via `fxc.exe` and links the C++ subsystems to produce the `bin/HybridCoreDiscovery.exe` executable.)*
-
-Once the build is complete, you can launch the engine simulation directly with:
-```powershell
+# 2. Run
 bin\HybridCoreDiscovery.exe
+
+# 3. Inside the app: Menu → Test → Start Hardware Test
+#    Watch GPU utilization climb to 100% in Task Manager!
+
+# 4. Production release package
+release.bat
 ```
+
+---
+
+## Project Structure
+
+```
+hybridcore/
+│
+├── build.bat                    # Dev build script — compiles HLSL + C++ via MSVC cl.exe
+├── release.bat                  # Production release packager (/O2 optimized)
+├── fetch_imgui.ps1              # PowerShell script to download Dear ImGui vendor files
+├── .gitignore                   # Git ignore rules (bin/, vendor/, *.obj, *.exe, etc.)
+├── imgui.ini                    # Dear ImGui window layout persistence
+├── README.md                    # This file
+│
+├── bin/                         # Build output directory (auto-generated)
+│   ├── HybridCoreDiscovery.exe  # Main executable
+│   └── shaders/
+│       └── compute.cso          # Compiled HLSL compute shader (generated by fxc.exe)
+│
+└── src/                         # Source code
+    ├── main.cpp                 # Entry point, DXGI adapter enumeration, global exception handler
+    │
+    ├── core/
+    │   ├── Engine.h / .cpp      # Application lifecycle: init, render loop, ImGui dashboard, menu events
+    │   ├── JobRouter.h / .cpp   # DAG scheduler, thread-safe job queues, work-stealing workers, telemetry
+    │   └── Window.h / .cpp      # Native Win32 window creation, message pump, native menu system
+    │
+    ├── graphics/
+    │   ├── ComputeBenchmarker.h / .cpp  # D3D11 compute context per GPU, shader dispatch, hot-reload
+    │
+    ├── shaders/
+    │   └── compute.hlsl         # HLSL compute shader — heavy math kernel (sin/cos/tan loops)
+    │
+    └── vendor/
+        └── imgui/               # Dear ImGui library (headers, static lib, DLL)
+```
+
+---
+
+## File Descriptions
+
+### Root Files
+
+| File | Description |
+|------|-------------|
+| `build.bat` | Development build script. Sets up MSVC environment via `vswhere.exe`, compiles `compute.hlsl` with `fxc.exe`, then compiles all C++ source files with `/std:c++20 /MT` flags. Links against `d3d11.lib`, `dxgi.lib`, `d3dcompiler.lib`, `windowsapp.lib`. |
+| `release.bat` | Production release packager. Compiles with `/O2` maximum speed optimization and `/MT` static linking. Packages everything into `HybridCore_Release/` folder with a launcher batch file. |
+| `fetch_imgui.ps1` | PowerShell bootstrap script that downloads Dear ImGui core source files from GitHub and organizes them into `src/vendor/imgui/`. Run once before first build. |
+| `.gitignore` | Excludes `bin/`, `*.obj`, `*.exe`, `vendor/` directories, and build logs from version control. |
+| `imgui.ini` | Auto-generated Dear ImGui configuration storing window positions and sizes across sessions. |
+
+### Source: `src/main.cpp`
+Application entry point. Performs three critical tasks:
+1. **Global SEH Filter** — Installs `SetUnhandledExceptionFilter` to catch access violations, stack overflows, and divide-by-zero exceptions, logging them to `error.log`.
+2. **DXGI Enumeration** — Queries `IDXGIFactory6` to print all physical GPUs and their VRAM on startup.
+3. **Engine Bootstrap** — Creates the `Engine` instance inside a structured `try-catch` block covering WinRT HRESULT errors and standard C++ exceptions.
+
+### Source: `src/core/Engine.h` & `Engine.cpp`
+The central orchestrator managing the entire application lifecycle:
+- **Initialize**: Creates the Win32 window, boots a D3D11 SwapChain for ImGui rendering, iterates DXGI adapters to spawn `ComputeBenchmarker` instances for each hardware GPU, and registers them as workers in the `JobRouter`.
+- **Run**: Fixed-tick main loop processing Win32 messages, updating simulation state, and rendering ImGui frames at 60 FPS with V-Sync.
+- **Update**: Polls HLSL shader file changes for hot-reload, injects DAG job batches when simulation is active (3 chained jobs per batch), and evaluates the DAG scheduler.
+- **Render**: Draws the ImGui telemetry dashboard showing global task count, per-GPU worker stats, and simulation status with color-coded indicators.
+- **Menu Events**: Handles native Win32 menu commands (Start/Stop Simulation, Exit).
+
+### Source: `src/core/JobRouter.h` & `JobRouter.cpp`
+Thread-safe work distribution engine implementing several subsystems:
+- **JobPool** (100,000 slots): Contiguous memory arena for zero-allocation job management. Eliminates heap fragmentation during sustained high-throughput operation.
+- **ThreadSafeJobQueue**: `std::condition_variable`-based blocking queue enabling efficient work-stealing — idle GPU threads sleep until work appears.
+- **WorkerQueue**: Background thread pulling jobs from the shared queue and executing GPU-specific payloads. Reports completion stats via atomic counters.
+- **JobRouter**: DAG evaluator that tracks job dependencies. Jobs with unmet dependencies remain pending; ready jobs are pushed to the central queue where any available GPU thread can steal them.
+- **WorkerStats**: Public telemetry interface returning per-worker name and completion count for ImGui display.
+
+### Source: `src/core/Window.h` & `Window.cpp`
+Pure Win32 native window implementation:
+- Creates a top-level `HWND` with a custom `WndProc` handling `WM_COMMAND` menu events, `WM_SIZE` resize, and `WM_DESTROY` shutdown.
+- Builds a native Windows menu bar with **File → Exit** and **Test → Start/Stop Hardware Test** options.
+- Forwards input events to ImGui via `ImGui_ImplWin32_WndProcHandler`.
+
+### Source: `src/graphics/ComputeBenchmarker.h` & `ComputeBenchmarker.cpp`
+Direct3D 11 GPU workload stressor:
+- **Initialize(adapterIndex)**: Creates a D3D11 device targeting a specific DXGI adapter. Compiles or loads the HLSL compute shader. Allocates a 1MB structured UAV buffer.
+- **DispatchWorkload()**: Binds the compute shader and UAV, dispatches 1024 thread groups × 256 threads = 262,144 concurrent GPU operations, then flushes immediately to force execution.
+- **CheckForShaderUpdates()**: Polls `compute.hlsl` for filesystem changes, recompiles via `D3DCompileFromFile`, and hot-swaps the shader under a mutex lock.
+
+### Source: `src/shaders/compute.hlsl`
+The GPU compute kernel that drives hardware utilization:
+- Executes 50,000 iterations of `sin(x) * cos(x) + tan(x * 0.5)` per thread.
+- Writes results to a `RWStructuredBuffer` to prevent the compiler from optimizing away the workload.
+- Designed to stress GPU ALU (arithmetic logic units) to maximum capacity.
+
+### Vendor: `src/vendor/imgui/`
+Dear ImGui library providing immediate-mode GUI rendering:
+- Includes core ImGui source files, Win32 platform backend, and DirectX 11 renderer backend.
+- Pre-built static library (`imgui.lib`) for linking.
+- Provides the real-time telemetry overlay rendered on the D3D11 SwapChain.
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────┐
+│                    Engine                        │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
+│  │ Window   │  │ ImGui    │  │ Job Generator │  │
+│  │ (Win32)  │  │ Overlay  │  │ (DAG Batches) │  │
+│  └──────────┘  └──────────┘  └───────┬───────┘  │
+│                                      │          │
+│  ┌───────────────────────────────────▼────────┐  │
+│  │           JobRouter (DAG Scheduler)        │  │
+│  │  ┌────────────────────────────────────┐    │  │
+│  │  │   ThreadSafeJobQueue (Central)     │    │  │
+│  │  │   Work-Stealing Pattern            │    │  │
+│  │  └──────┬───────────────┬─────────────┘    │  │
+│  └─────────│───────────────│──────────────────┘  │
+│            │               │                     │
+│  ┌─────────▼────┐  ┌──────▼──────────┐          │
+│  │ GPU Worker 0 │  │ GPU Worker 1    │  ...N    │
+│  │ (RX 9070)    │  │ (890M iGPU)     │          │
+│  │ D3D11 CS     │  │ D3D11 CS        │          │
+│  └──────────────┘  └─────────────────┘          │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+## Build Requirements
+
+- **OS**: Windows 10/11 (64-bit)
+- **Compiler**: Visual Studio 2022+ with "C++ Desktop Development" workload
+- **SDK**: Windows SDK 10.0.22000.0 or later
+- **GPU**: Any DirectX 11 compatible graphics card(s)
+
+---
+
+## License
+
+This project is for educational and benchmarking purposes.

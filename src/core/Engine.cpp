@@ -13,7 +13,7 @@
 
 namespace core {
 
-Engine::Engine() : m_isRunning(false), m_isSimulating(false), m_batchCounter(0), m_lastEGpuCount(0), m_lastNpuCount(0) {}
+Engine::Engine() : m_isRunning(false), m_isSimulating(false), m_batchCounter(0) {}
 Engine::~Engine() {}
 
 void Engine::CreateRenderTarget() {
@@ -109,17 +109,6 @@ void Engine::Initialize() {
         std::cerr << "[Engine] DIKKAT: GPU donanimina erisilemedi. Yük yönlendirilemeyecek." << std::endl;
     }
 
-    // Windows Machine Learning NPU (Ryzen AI) arayüzünü başlat
-    m_npuEngine = std::make_unique<ai::NpuEngine>();
-    if (m_npuEngine->Initialize(L"bin\\models\\mnist-8.onnx")) {
-        auto* nPtr = m_npuEngine.get();
-        m_jobRouter->RegisterNpuWorker("Ryzen AI NPU Worker", [nPtr](const Job&) { 
-            nPtr->EvaluateDummyPayload(); 
-        });
-    } else {
-        std::cerr << "[Engine] DIKKAT: NPU ONNX modellemesi basarisiz." << std::endl;
-    }
-
     m_isRunning = true;
     std::cout << "[Engine] Window system, Menu, and hardware infrastructures ready." << std::endl;
 }
@@ -134,8 +123,6 @@ void Engine::HandleMenuEvent(int menuId) {
         case ID_MENU_HARDWARE_TEST:
             std::cout << "[Engine-Menu] -> START CONTINUOUS SIMULATION: Maxing out workloads..." << std::endl;
             m_lastLogTime = std::chrono::steady_clock::now();
-            m_lastEGpuCount = m_jobRouter ? m_jobRouter->GeteGpuCompleted() : 0;
-            m_lastNpuCount = m_jobRouter ? m_jobRouter->GetNpuCompleted() : 0;
             m_isSimulating = true;
             break;
             
@@ -183,10 +170,10 @@ void Engine::Update() {
             std::string j2 = "J2_" + std::to_string(bId);
             std::string j3 = "J3_" + std::to_string(bId);
 
-            // JobPayload logic is managed locally per worker, removing lambda bindings
-            m_jobRouter->SubmitJob({j1, "Pre-process (Batch " + std::to_string(bId) + ")", JobType::HEAVY_COMPUTE, {}});
-            m_jobRouter->SubmitJob({j2, "AI Inference (Batch " + std::to_string(bId) + ")", JobType::AI_INFERENCE, {j1}});
-            m_jobRouter->SubmitJob({j3, "Post-process (Batch " + std::to_string(bId) + ")", JobType::HEAVY_COMPUTE, {j2}});
+            // Dispatch completely agnostic GPU workloads to saturate the execution graph
+            m_jobRouter->SubmitJob({j1, "Compute Node 1 (Batch " + std::to_string(bId) + ")", JobType::GENERIC_COMPUTE, {}});
+            m_jobRouter->SubmitJob({j2, "Compute Node 2 (Batch " + std::to_string(bId) + ")", JobType::GENERIC_COMPUTE, {j1}});
+            m_jobRouter->SubmitJob({j3, "Compute Node 3 (Batch " + std::to_string(bId) + ")", JobType::GENERIC_COMPUTE, {j2}});
         }
         
         m_jobRouter->Update(); // Evaluate DAG and dispatch jobs to workers
@@ -209,8 +196,10 @@ void Engine::Render() {
     if (m_jobRouter) {
         ImGui::Text("Global Active Tasks : %zu", m_jobRouter->GetTotalJobCount());
         ImGui::Separator();
-        ImGui::Text("RX 9070 (eGPU) Tasks Completed : %llu", m_jobRouter->GeteGpuCompleted());
-        ImGui::Text("Ryzen AI (NPU) Tasks Completed: %llu", m_jobRouter->GetNpuCompleted());
+        auto stats = m_jobRouter->GetWorkerStats();
+        for (const auto& w : stats) {
+            ImGui::Text("%s Tasks Completed : %llu", w.name.c_str(), w.completed);
+        }
     } else {
         ImGui::Text("Job Router mapping disabled.");
     }

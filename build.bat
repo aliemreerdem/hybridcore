@@ -28,13 +28,16 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+:: ImGui Vendor Files
+set IMGUI_DIR=src\vendor\imgui
+set IMGUI_SRC=%IMGUI_DIR%\imgui.cpp %IMGUI_DIR%\imgui_draw.cpp %IMGUI_DIR%\imgui_tables.cpp %IMGUI_DIR%\imgui_widgets.cpp %IMGUI_DIR%\imgui_impl_win32.cpp %IMGUI_DIR%\imgui_impl_dx11.cpp
+
 echo Compiling HybridCore Subsystems...
-cl.exe /nologo /EHsc /W4 /std:c++20 /await /MT ^
+cl.exe /nologo /EHsc /W4 /std:c++20 /await /MT /I "%IMGUI_DIR%" ^
     src\main.cpp src\core\Window.cpp src\core\JobRouter.cpp ^
-    src\core\Engine.cpp src\graphics\ComputeBenchmarker.cpp src\ai\NpuEngine.cpp ^
-    src\vendor\imgui\imgui.cpp src\vendor\imgui\imgui_draw.cpp src\vendor\imgui\imgui_tables.cpp ^
-    src\vendor\imgui\imgui_widgets.cpp src\vendor\imgui\imgui_impl_win32.cpp src\vendor\imgui\imgui_impl_dx11.cpp ^
-    /Fobin\ /Febin\HybridCoreDiscovery.exe /link user32.lib dxgi.lib d3d11.lib windowsapp.lib d3dcompiler.lib
+    src\core\Engine.cpp src\graphics\ComputeBenchmarker.cpp ^
+    %IMGUI_SRC% ^
+    /Fobin\ /Febin\HybridCoreDiscovery.exe /link user32.lib dxgi.lib d3d11.lib d3dcompiler.lib windowsapp.lib
 
 if %ERRORLEVEL% NEQ 0 (
     echo.

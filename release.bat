@@ -36,25 +36,23 @@ mkdir HybridCore_Release\bin
 mkdir HybridCore_Release\bin\shaders
 mkdir HybridCore_Release\bin\models
 
-echo [2/5] Compiling HLSL Compute Shader (Hardware Optimized)...
+echo [2/4] Compiling HLSL Compute Shader (Hardware Optimized)...
 fxc.exe /nologo /T cs_5_0 /E main /O3 /Fo bin\shaders\compute.cso src\shaders\compute.hlsl
 if %errorlevel% neq 0 (
     echo [ERROR] Shader compilation failed!
     goto :eof
 )
 
-echo [3/5] Compiling C++ Engine in MAXIMUM Release (/O2 /MT /D NDEBUG) Mode...
-:: /O2: Maximum Speed, /MT: Static Multi-Thread Runtime (prevents VCRUNTIME dll dependency on other PCs)
-cl /EHsc /O2 /MT /std:c++20 /D NDEBUG ^
-    src\main.cpp src\core\Window.cpp src\core\JobRouter.cpp ^
-    src\core\Engine.cpp src\graphics\ComputeBenchmarker.cpp src\ai\NpuEngine.cpp ^
-    src\vendor\imgui\imgui.cpp src\vendor\imgui\imgui_draw.cpp ^
-    src\vendor\imgui\imgui_tables.cpp src\vendor\imgui\imgui_widgets.cpp ^
-    src\vendor\imgui\imgui_impl_win32.cpp src\vendor\imgui\imgui_impl_dx11.cpp ^
-    /Fe:bin\HybridCoreDiscovery.exe ^
-    /Fo:bin\ ^
-    user32.lib dxgi.lib d3d11.lib d3dcompiler.lib windowsapp.lib > build_release.log
+:: Standalone ImGui NuGet Library
+set IMGUI_INC=src\vendor\imgui
+set IMGUI_LIB=src\vendor\imgui\bin
 
+if not exist HybridCore_Release\bin\imgui.dll (
+    copy /y src\vendor\imgui\bin\imgui.dll HybridCore_Release\bin\ >nul
+)
+
+echo [2.5/4] Compiling Core Subsystems and UI Application...
+cl.exe /nologo /EHsc /W4 /O2 /std:c++20 /I"%IMGUI_INC%" src\main.cpp src\core\Window.cpp src\core\JobRouter.cpp src\core\Engine.cpp src\graphics\ComputeBenchmarker.cpp src\vendor\imgui\imgui.cpp src\vendor\imgui\imgui_draw.cpp src\vendor\imgui\imgui_tables.cpp src\vendor\imgui\imgui_widgets.cpp src\vendor\imgui\imgui_impl_win32.cpp src\vendor\imgui\imgui_impl_dx11.cpp /link /OUT:HybridCore_Release\bin\HybridCoreDiscovery.exe user32.lib dxgi.lib d3d11.lib d3dcompiler.lib windowsapp.lib "%IMGUI_LIB%\imgui.lib" > build_release.log
 if exist bin\*.obj del bin\*.obj
 
 if %errorlevel% neq 0 (

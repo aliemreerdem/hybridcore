@@ -14,8 +14,7 @@
 namespace core {
 
 enum class JobType {
-    HEAVY_COMPUTE, // Routed to eGPU (DX12 Compute)
-    AI_INFERENCE   // Routed to NPU (ONNX Runtime / DirectML)
+    GENERIC_COMPUTE 
 };
 
 struct Job {
@@ -107,6 +106,7 @@ public:
 
     void Stop();
     uint64_t GetCompletedCount() const { return m_completedJobsCount.load(); }
+    std::string GetName() const { return m_name; }
 
     // Invoked safely from worker thread upon task completion
     std::function<void(Job*)> onJobCompleted;
@@ -117,9 +117,9 @@ private:
     std::string m_name;
     std::shared_ptr<ThreadSafeJobQueue> m_sharedQueue;
     std::thread m_thread;
+    
     std::atomic<bool> m_running;
     std::atomic<uint64_t> m_completedJobsCount{0};
-    
     std::function<void(const Job&)> m_executor;
 };
 
@@ -129,31 +129,27 @@ public:
     ~JobRouter();
 
     void RegisterGpuWorker(const std::string& name, std::function<void(const Job&)> executor);
-    void RegisterNpuWorker(const std::string& name, std::function<void(const Job&)> executor);
-
     void SubmitJob(const Job& job);
-    void Update(); // Called per engine tick
+    void Update(); 
 
     size_t GetTotalJobCount();
     void ClearJobs();
     
-    uint64_t GeteGpuCompleted();
-    uint64_t GetNpuCompleted();
+    struct WorkerStats {
+        std::string name;
+        uint64_t completed;
+    };
+    std::vector<WorkerStats> GetWorkerStats() const;
 
 private:
     void OnJobCompleted(Job* job);
 
     JobPool m_jobPool;
-
     std::shared_ptr<ThreadSafeJobQueue> m_gpuJobQueue;
-    std::shared_ptr<ThreadSafeJobQueue> m_npuJobQueue;
-
     std::vector<std::unique_ptr<WorkerQueue>> m_gpuWorkers;
-    std::vector<std::unique_ptr<WorkerQueue>> m_npuWorkers;
     
     std::vector<Job*> m_pendingJobs;
     std::unordered_set<std::string> m_completedJobs;
-
     std::mutex m_routerMutex;
 };
 

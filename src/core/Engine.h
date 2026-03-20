@@ -2,8 +2,6 @@
 #include "Window.h"
 #include "JobRouter.h"
 #include "../graphics/ComputeBenchmarker.h"
-#include "../ai/NpuEngine.h"
-
 #include <d3d11.h>
 #include <dxgi.h>
 
@@ -33,14 +31,12 @@ private:
     std::unique_ptr<Window> m_window;
     std::unique_ptr<JobRouter> m_jobRouter;
     std::vector<std::unique_ptr<graphics::ComputeBenchmarker>> m_gpuBenchmarkers;
-    std::unique_ptr<ai::NpuEngine> m_npuEngine;
+    
     bool m_isRunning;
     std::atomic<bool> m_isSimulating;
     uint64_t m_batchCounter;
     
     std::chrono::steady_clock::time_point m_lastLogTime;
-    uint64_t m_lastEGpuCount;
-    uint64_t m_lastNpuCount;
 
     // --- Overlay Render Pipeline ---
     Microsoft::WRL::ComPtr<ID3D11Device> m_d3dDevice;
